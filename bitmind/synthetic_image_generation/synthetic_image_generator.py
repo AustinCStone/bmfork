@@ -1,6 +1,7 @@
 from transformers import pipeline
 from transformers import set_seed
-from diffusers import StableDiffusionXLPipeline, FluxPipeline, StableDiffusionPipeline
+from diffusers import StableDiffusionXLPipeline, FluxPipeline, StableDiffusionPipeline, IFPipeline, IFSuperResolutionPipeline
+from diffusers.utils import pt_to_pil
 import bittensor as bt
 import numpy as np
 import torch
@@ -145,6 +146,10 @@ class SyntheticImageGenerator:
         """
         Clears GPU memory by deleting the loaded diffuser and performing garbage collection.
         """
+        if hasattr(self, 'stage1'):
+            del self.stage1
+        if hasattr(self, 'stage2'):
+            del self.stage2
         if self.diffuser is not None:
             bt.logging.debug(f"Deleting previous diffuser, freeing memory")
             del self.diffuser
@@ -165,20 +170,53 @@ class SyntheticImageGenerator:
         
         bt.logging.info(f"Loading image generation model ({diffuser_name})...")
         self.diffuser_name = diffuser_name
-        pipeline_class = globals()[DIFFUSER_PIPELINE[diffuser_name]]
-        self.diffuser = pipeline_class.from_pretrained(diffuser_name,
-                                                       cache_dir=HUGGINGFACE_CACHE_DIR,
-                                                       **DIFFUSER_ARGS[diffuser_name],
-                                                       add_watermarker=False)
-        self.diffuser.set_progress_bar_config(disable=True)
-        if DIFFUSER_CPU_OFFLOAD_ENABLED[diffuser_name]:
-            self.diffuser.enable_model_cpu_offload()
-        elif not gpu_id:
-            self.diffuser.to("cuda")
-        elif gpu_id:
-            self.diffuser.to(f"cuda:{gpu_id}")
+        
+        pipeline_type = DIFFUSER_PIPELINE[diffuser_name]
+        
+        if pipeline_type == "IFPipelineWithStages":
+            # Load stage 1 model
+            self.stage1 = IFPipeline.from_pretrained(
+                diffuser_name,
+                variant="fp16",
+                torch_dtype=torch.float16
+            )
             
-        bt.logging.info(f"Loaded {diffuser_name} using {pipeline_class.__name__}.")
+            # Load stage 2 model
+            self.stage2 = IFSuperResolutionPipeline.from_pretrained(
+                DIFFUSER_ARGS[diffuser_name]["stage2_model"],
+                text_encoder=None,  # Important: set to None as per docs
+                variant="fp16",
+                torch_dtype=torch.float16
+            )
+            
+            # Enable memory efficient attention
+            #self.stage1.enable_xformers_memory_efficient_attention()
+            #self.stage2.enable_xformers_memory_efficient_attention()
+            
+            if not gpu_id:
+                self.stage1.to("cuda")
+                self.stage2.to("cuda")
+            else:
+                self.stage1.to(f"cuda:{gpu_id}")
+                self.stage2.to(f"cuda:{gpu_id}")
+                
+            self.diffuser = self.stage1  # For compatibility with existing code
+            bt.logging.info(f"Loaded DeepFloyd IF pipeline with both stages")
+        else:
+            pipeline_class = globals()[DIFFUSER_PIPELINE[diffuser_name]]
+            self.diffuser = pipeline_class.from_pretrained(diffuser_name,
+                                                        cache_dir=HUGGINGFACE_CACHE_DIR,
+                                                        **DIFFUSER_ARGS[diffuser_name],
+                                                        add_watermarker=False)
+            self.diffuser.set_progress_bar_config(disable=True)
+            if DIFFUSER_CPU_OFFLOAD_ENABLED[diffuser_name]:
+                self.diffuser.enable_model_cpu_offload()
+            elif not gpu_id:
+                self.diffuser.to("cuda")
+            elif gpu_id:
+                self.diffuser.to(f"cuda:{gpu_id}")
+                
+            bt.logging.info(f"Loaded {diffuser_name} using {pipeline_type}.")
 
     def generate_image_caption(self, image_sample) -> str:
         """
@@ -332,7 +370,34 @@ class SyntheticImageGenerator:
             # Record the time taken to generate the image
             start_time = time.time()
             # Generate image using the diffuser with appropriate arguments
-            gen_image = self.diffuser(prompt=truncated_prompt, num_images_per_prompt=1, **gen_args).images[0]
+            if DIFFUSER_PIPELINE[self.diffuser_name] == "IFPipelineWithStages":
+                # Generate text embeddings first
+                prompt_embeds, negative_embeds = self.stage1.encode_prompt(truncated_prompt)
+                
+                # Generate base image with stage 1
+                stage1_output = self.stage1(
+                    prompt_embeds=prompt_embeds,
+                    negative_prompt_embeds=negative_embeds,
+                    output_type="pt",
+                ).images
+                
+                # Upscale with stage 2
+                stage2_output = self.stage2(
+                    image=stage1_output,
+                    prompt_embeds=prompt_embeds,
+                    negative_prompt_embeds=negative_embeds,
+                    output_type="pt",
+                ).images
+                
+                gen_image = pt_to_pil(stage2_output)[0]
+            else:
+                # Original generation logic for other models
+                gen_image = self.diffuser(
+                    prompt=truncated_prompt,
+                    num_images_per_prompt=1,
+                    **gen_args
+                ).images[0]
+            
             # Calculate generation time
             gen_time = time.time() - start_time
         except Exception as e:

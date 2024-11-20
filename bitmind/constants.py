@@ -101,6 +101,11 @@ VALIDATOR_MODEL_META = {
             "use_safetensors": True,
             "torch_dtype": torch.float16,
             "pipeline": "StableDiffusionXLPipeline"
+        },
+        {
+            "path": "DeepFloyd/IF-I-XL-v1.0",
+            "pipeline": "IFPipelineWithStages",
+            "stage2_model": "DeepFloyd/IF-II-L-v1.0",
         }
     ]
 }
