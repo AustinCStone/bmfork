@@ -6,14 +6,20 @@ WANDB_ENTITY = 'bitmindai'
 
 DATASET_META = {
     "real": [
-        {"path": "bitmind/bm-real"},
-        {"path": "bitmind/open-images-v7"},
-        {"path": "bitmind/ffhq-256"},
+        {"path": "bitmind/celeb-a-hq"}, # 24,000
+        {"path": "bitmind/ffhq-256"}, # 40,000
+        {"path": "bitmind/MS-COCO-unique-256"}, # 40,000
+        {"path": "bitmind/AFHQ"}, # 12,642
+        {"path": "bitmind/lfw"}, # 10,560
+        {"path": "bitmind/caltech-256"}, # 24,485
+        {"path": "bitmind/caltech-101"}, # 7,315
+        {"path": "bitmind/dtd"} # 4,512
     ],
     "fake": [
-        {"path": "bitmind/bm-realvisxl"},
-        {"path": "bitmind/bm-mobius"},
-        {"path": "bitmind/bm-sdxl"}
+        {"path": "bitmind/bm-subnet-weekly-stable-diffusion-xl-base-1.0-256"}, # 40,000
+        {"path": "bitmind/bm-subnet-weekly-mobius-256"}, # 40,000
+        {"path": "bitmind/bm-subnet-weekly-RealVisXL_V4.0-256"}, # 40,000
+        {"path": "bitmind/bm-flux-offline"} # 40,000
     ]
 }
 

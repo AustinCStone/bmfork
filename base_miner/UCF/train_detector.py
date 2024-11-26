@@ -46,7 +46,7 @@ from huggingface_hub import hf_hub_download
 
 # BitMind imports (not from original Deepfake Bench repo)
 from bitmind.utils.data import load_and_split_datasets, create_real_fake_datasets
-from bitmind.image_transforms import base_transforms, random_aug_transforms, ucf_transforms
+from bitmind.image_transforms import base_transforms, random_aug_transforms, ucf_transforms, training_transforms
 from bitmind.constants import DATASET_META, FACE_TRAINING_DATASET_META
 from config.constants import (
     CONFIG_PATH,
@@ -506,7 +506,7 @@ def main():
         config['nEpochs'] = args.epochs
 
     config['split_transforms'] = {
-        'train': ucf_transforms,
+        'train': training_transforms,
         'validation': ucf_transforms,
         'test': ucf_transforms
     }

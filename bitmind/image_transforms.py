@@ -72,25 +72,43 @@ class ConvertToRGB:
 
 
 class CLAHE:
-    def __call__(self, image, clip_limit=1.0, tile_grid_size=(8, 8)):
+    def __init__(self):
+        self.clahe = cv2.createCLAHE(clipLimit=1.0, tileGridSize=(8,8))
+
+    def __call__(self, image):
         # Convert PIL image to NumPy array
         image_np = np.array(image)
-
-        # Create a CLAHE object
-        clahe = cv2.createCLAHE(clipLimit=clip_limit, tileGridSize=tile_grid_size)
 
         # Apply CLAHE to each channel separately if it's a color image
         if len(image_np.shape) == 3:  # Color image
             channels = cv2.split(image_np)
-            clahe_channels = [clahe.apply(ch) for ch in channels]
+            clahe_channels = [self.clahe.apply(ch) for ch in channels]
             clahe_image_np = cv2.merge(clahe_channels)
         else:  # Grayscale image
-            clahe_image_np = clahe.apply(image_np)
+            clahe_image_np = self.clahe.apply(image_np)
 
         # Convert back to PIL image
         clahe_image = Image.fromarray(clahe_image_np)
 
         return clahe_image
+
+class TensorCLAHE:
+    def __init__(self):
+        self.clahe = cv2.createCLAHE(clipLimit=1.0, tileGridSize=(8,8))
+
+    def __call__(self, tensor):
+        # Convert tensor to numpy array (H,W,C) format
+        img_np = tensor.permute(1, 2, 0).numpy() * 255
+        img_np = img_np.astype(np.uint8)
+
+        # Apply CLAHE to each channel
+        channels = cv2.split(img_np)
+        clahe_channels = [self.clahe.apply(ch) for ch in channels]
+        clahe_image_np = cv2.merge(clahe_channels)
+
+        # Convert back to tensor
+        tensor = torch.from_numpy(clahe_image_np).float() / 255.0
+        return tensor.permute(2, 0, 1)
 
 class ComposeWithParams:
     def __init__(self, transforms):
@@ -134,6 +152,21 @@ ucf_transforms = transforms.Compose([
     ConvertToRGB(),
     CenterCrop(),
     transforms.Resize(TARGET_IMAGE_SIZE),
-    CLAHE(),
+    #CLAHE(),
     transforms.ToTensor()
+    transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+    #TensorCLAHE()
+])
+
+training_transforms = ComposeWithParams([
+    # Random augmentation pipeline
+    ConvertToRGB(),
+    transforms.ToTensor(),
+    RandomRotationWithParams(20, interpolation=transforms.InterpolationMode.BILINEAR),
+    RandomResizedCropWithParams(TARGET_IMAGE_SIZE, scale=(0.2, 1.0), ratio=(1.0, 1.0)),
+    RandomHorizontalFlipWithParams(),
+    RandomVerticalFlipWithParams(),
+    transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+    # UCF
+    #TensorCLAHE()
 ])

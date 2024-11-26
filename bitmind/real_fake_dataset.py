@@ -12,7 +12,7 @@ class RealFakeDataset:
         fake_prob=0.5,
         source_label_mapping=None,
         sampling_strategy='balanced',
-        max_samples_per_dataset=20000,
+        max_samples_per_dataset=40000,
         split='train'
     ):
         """d
