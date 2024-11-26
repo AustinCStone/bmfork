@@ -73,8 +73,8 @@ class Trainer(object):
         if 'cuda' in str(self.device) and self.config['ddp'] == True and torch.cuda.is_available():
             num_gpus = torch.cuda.device_count()
             print(f'avai gpus: {num_gpus}')
-            self.model = DDP(self.model, device_ids=[self.config['gpu_id']],
-                             find_unused_parameters=True, output_device=self.config['gpu_id'])
+            self.model = DDP(self.model, device_ids=[self.config['local_rank']],
+                             find_unused_parameters=True, output_device=self.config['local_rank'])
 
     def setTrain(self):
         self.model.train()
@@ -223,7 +223,7 @@ class Trainer(object):
                 train_recorder_loss[name].update(value)
 
             # run wandb logging to visualize the training process
-            if iteration % 300 == 0 and self.config['gpu_id']==0:
+            if iteration % 300 == 0 and self.config['local_rank']==0:
                 if self.config['SWA'] and (epoch>self.config['swa_start'] or self.config['dry_run']):
                     self.scheduler.step()
                 loss_str = f"Iter: {step_cnt}    "
@@ -281,13 +281,37 @@ class Trainer(object):
                     data_dict[key]=data_dict[key].cpu()
         return validation_best_metric
     
-    def get_respect_acc(self,prob,label):
+    # def get_respect_acc(self,prob,label):
+    #     pred = np.where(prob > 0.5, 1, 0)
+    #     judge = (pred == label)
+    #     zero_num = len(label) - np.count_nonzero(label)
+    #     acc_fake = np.count_nonzero(judge[zero_num:]) / len(judge[zero_num:])
+    #     acc_real = np.count_nonzero(judge[:zero_num]) / len(judge[:zero_num])
+    #     return acc_real,acc_fake
+    
+    def get_respect_acc(self, prob, label):
+        """
+        Calculate separate accuracies for real and fake classes.
+        
+        Args:
+            prob (np.ndarray): Model predictions (probabilities or logits)
+            label (np.ndarray): Ground truth labels
+            
+        Returns:
+            tuple: (real_accuracy, fake_accuracy)
+        """
+        # Convert probabilities to binary predictions
         pred = np.where(prob > 0.5, 1, 0)
-        judge = (pred == label)
-        zero_num = len(label) - np.count_nonzero(label)
-        acc_fake = np.count_nonzero(judge[zero_num:]) / len(judge[zero_num:])
-        acc_real = np.count_nonzero(judge[:zero_num]) / len(judge[:zero_num])
-        return acc_real,acc_fake
+        
+        # Separate real and fake samples
+        real_mask = (label == 0)
+        fake_mask = (label == 1)
+        
+        # Calculate accuracies for each class
+        acc_real = np.mean(pred[real_mask] == label[real_mask]) if np.any(real_mask) else 0
+        acc_fake = np.mean(pred[fake_mask] == label[fake_mask]) if np.any(fake_mask) else 0
+        
+        return acc_real, acc_fake
 
     def eval_one_dataset(self, data_loader):
         # define eval recorder
