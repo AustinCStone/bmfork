@@ -1,3 +1,4 @@
+import asyncio
 import gc
 import json
 import os
@@ -25,6 +26,8 @@ from bitmind.validator.config import (
     select_random_t2vis_model,
     get_modality
 )
+from bitmind.synthetic_data_generation.remote_task import TaskStatus, TaskTracker
+from bitmind.synthetic_data_generation.generation_service_proxy_client import GenerationServiceProxyClient
 from bitmind.synthetic_data_generation.prompt_utils import truncate_prompt_if_too_long
 from bitmind.synthetic_data_generation.image_annotation_generator import ImageAnnotationGenerator
 from bitmind.validator.cache import ImageCache
@@ -70,6 +73,7 @@ class SyntheticDataGenerator:
         prompt_type: str = 'annotation',
         output_dir: Optional[Union[str, Path]] = None,
         image_cache: Optional[ImageCache] = None,
+        use_generation_services: bool = True,
         device: str = 'cuda'
     ) -> None:
         """
@@ -121,13 +125,20 @@ class SyntheticDataGenerator:
 
         self.image_cache = image_cache
 
-    def batch_generate(self, batch_size: int = 5) -> None:
+        self.use_generation_services = use_generation_services
+        if self.use_generation_services:
+            self.proxy_client = GenerationServiceProxyClient(
+                base_url="http://your-proxy-server:8000",
+                api_key="your-api-key"
+            )
+            self.task_tracker = TaskTracker()
+
+    async def batch_generate(self, batch_size: int = 5) -> None:
         """
-        Asynchronously generate synthetic data in batches.
+        Asynchronously generate synthetic data in batches, including remote API calls.
+        """
         
-        Args:
-            batch_size: Number of prompts to generate in each batch.
-        """
+        # Generate prompts
         prompts = []
         bt.logging.info(f"Generating {batch_size} prompts")
         for i in range(batch_size):
@@ -136,11 +147,26 @@ class SyntheticDataGenerator:
             prompts.append(self.generate_prompt(image=image_sample['image'], clear_gpu=i==batch_size-1))
             bt.logging.info(f"Caption {i+1}/{batch_size} generated: {prompts[-1]}")
 
+        if self.use_generation_services:
+            # Start remote generation tasks asynchronously
+            for i, prompt in enumerate(prompts):
+                provider="kling"  # This will be dynamic when we add more providers
+                try:
+                    result = await self.proxy_client.generate_video(prompt)
+                    self.task_tracker.add_task(
+                        task_id=result['video_id'],
+                        provider=provider,
+                        prompt=prompt
+                    )
+                    bt.logging.info(f"Started {provider} generation for prompt {i+1}: {prompt}")
+                except Exception as e:
+                    bt.logging.error(f"Failed to start remote generation for prompt {i+1}: {str(e)}")
 
-        # shuffle and interleave models
+        # Handle local model generation while remote tasks are processing
         t2i_model_names = random.sample(T2I_MODEL_NAMES, len(T2I_MODEL_NAMES))
         t2v_model_names = random.sample(T2V_MODEL_NAMES, len(T2V_MODEL_NAMES))
         model_names = [m for pair in zip(t2v_model_names, t2i_model_names) for m in pair]
+        
         for model_name in model_names:
             modality = get_modality(model_name)
             for i, prompt in enumerate(prompts):
@@ -167,6 +193,59 @@ class SyntheticDataGenerator:
                         fps=30
                     )
                 bt.logging.info(f"Wrote to {out_path}")
+
+                if self.use_generation_services:
+                    # Check remote tasks periodically
+                    pending_tasks = self.task_tracker.get_pending_tasks()
+                    for task_id, task in pending_tasks.items():
+                        try:
+                            status = await self.proxy_client.check_status(task_id)
+                            if status and status.get('status') in [TaskStatus.COMPLETED, TaskStatus.FAILED]:
+                                self.task_tracker.update_task(
+                                    task_id=task_id,
+                                    status=TaskStatus(status['status']),
+                                    video_url=status.get('video_url'),
+                                    error=status.get('error'),
+                                    metadata=status.get('metadata')
+                                )
+                                
+                                if status['status'] == TaskStatus.COMPLETED:
+                                    # Download and save the video
+                                    video_url = status.get('video_url')
+                                    if video_url:
+                                        out_path = self.output_dir / 'video' / f"{task.provider}_{task_id}.mp4"
+                                        # Download video implementation here
+                                        bt.logging.info(f"Downloaded {task.provider} video to {out_path}")
+                        except Exception as e:
+                            bt.logging.error(f"Failed to check {task.provider} task {task_id}: {str(e)}")
+
+        if self.use_generation_services:
+            # Final check for any remaining remote tasks
+            while self.task_tracker.get_pending_tasks():
+                pending_tasks = self.task_tracker.get_pending_tasks()
+                for task_id, task in pending_tasks.items():
+                    try:
+                        status = await self.proxy_client.check_status(task_id)
+                        if status and status.get('status') in [TaskStatus.COMPLETED, TaskStatus.FAILED]:
+                            self.task_tracker.update_task(
+                                task_id=task_id,
+                                status=TaskStatus(status['status']),
+                                video_url=status.get('video_url'),
+                                error=status.get('error'),
+                                metadata=status.get('metadata')
+                            )
+                            
+                            if status['status'] == TaskStatus.COMPLETED:
+                                video_url = status.get('video_url')
+                                if video_url:
+                                    out_path = self.output_dir / 'video' / f"{task.provider}_{task_id}.mp4"
+                                    # Download video implementation here
+                                    bt.logging.info(f"Downloaded {task.provider} video to {out_path}")
+                    except Exception as e:
+                        bt.logging.error(f"Failed to check {task.provider} task {task_id}: {str(e)}")
+                await asyncio.sleep(10)
+
+        bt.logging.info("Batch generation completed")
 
     def generate(
         self,
