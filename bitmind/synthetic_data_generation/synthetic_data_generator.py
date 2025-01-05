@@ -27,7 +27,7 @@ from bitmind.validator.config import (
     get_modality
 )
 from bitmind.synthetic_data_generation.remote_task import TaskStatus, TaskTracker
-from bitmind.synthetic_data_generation.generation_service_proxy_client import GenerationServiceProxyClient
+from bitmind.synthetic_data_generation.generation_service_proxy_client import GenerationServiceProxyClient, download_video
 from bitmind.synthetic_data_generation.prompt_utils import truncate_prompt_if_too_long
 from bitmind.synthetic_data_generation.image_annotation_generator import ImageAnnotationGenerator
 from bitmind.validator.cache import ImageCache
@@ -195,7 +195,7 @@ class SyntheticDataGenerator:
                 bt.logging.info(f"Wrote to {out_path}")
 
                 if self.use_generation_services:
-                    # Check remote tasks periodically
+                    # Check remote task statuses
                     pending_tasks = self.task_tracker.get_pending_tasks()
                     for task_id, task in pending_tasks.items():
                         try:
@@ -210,12 +210,20 @@ class SyntheticDataGenerator:
                                 )
                                 
                                 if status['status'] == TaskStatus.COMPLETED:
-                                    # Download and save the video
                                     video_url = status.get('video_url')
                                     if video_url:
                                         out_path = self.output_dir / 'video' / f"{task.provider}_{task_id}.mp4"
-                                        # Download video implementation here
-                                        bt.logging.info(f"Downloaded {task.provider} video to {out_path}")
+                                        if await download_video(video_url, out_path):
+                                            self.task_tracker.update_task(
+                                                task_id=task_id,
+                                                metadata={
+                                                    **(task.metadata or {}),
+                                                    'local_path': str(out_path)
+                                                }
+                                            )
+                                            bt.logging.info(f"Downloaded {task.provider} video to {out_path}")
+                                        else:
+                                            bt.logging.error(f"Failed to download video for task {task_id}")
                         except Exception as e:
                             bt.logging.error(f"Failed to check {task.provider} task {task_id}: {str(e)}")
 
@@ -239,8 +247,17 @@ class SyntheticDataGenerator:
                                 video_url = status.get('video_url')
                                 if video_url:
                                     out_path = self.output_dir / 'video' / f"{task.provider}_{task_id}.mp4"
-                                    # Download video implementation here
-                                    bt.logging.info(f"Downloaded {task.provider} video to {out_path}")
+                                    if await download_video(video_url, out_path):
+                                        self.task_tracker.update_task(
+                                            task_id=task_id,
+                                            metadata={
+                                                **(task.metadata or {}),
+                                                'local_path': str(out_path)
+                                            }
+                                        )
+                                        bt.logging.info(f"Downloaded {task.provider} video to {out_path}")
+                                    else:
+                                        bt.logging.error(f"Failed to download video for task {task_id}")
                     except Exception as e:
                         bt.logging.error(f"Failed to check {task.provider} task {task_id}: {str(e)}")
                 await asyncio.sleep(10)
