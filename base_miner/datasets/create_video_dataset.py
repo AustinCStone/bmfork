@@ -187,7 +187,6 @@ def create_video_frames_dataset(
         supervised_keys=None,
         homepage="",
         citation="",
-        task_templates=None,
         dataset_name=dataset_name
     )
     
