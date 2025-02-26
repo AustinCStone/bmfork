@@ -22,10 +22,10 @@ IMAGE_DATASETS = {
 # see bitmind-subnet/create_video_dataset_example.sh 
 VIDEO_DATASETS = {
     "real": [
-        {"path": ""}  # example: {"path": "~/.cache/sn34/train_dataset/real_frames"}
+        {"path": ""}  # example: {"path": "~/.cache/sn34/train_dataset/real_frames_dataset"}
     ],
     "fake": [
-        {"path": ""}  # example: {"path": "~/.cache/sn34/train_dataset/synthetic_frames"}
+        {"path": ""}  # example: {"path": "~/.cache/sn34/train_dataset/synthetic_frames_dataset"}
     ]
 }
 

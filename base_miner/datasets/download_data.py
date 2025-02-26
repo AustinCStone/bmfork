@@ -21,56 +21,81 @@ from typing import Optional
 import os
 
 
+from datasets import load_dataset, load_from_disk
+from typing import Optional, Union, Dict, Any
+import os
+
 def load_huggingface_dataset(
     path: str,
-    split: str = 'train',
+    split: Optional[str] = 'train',
     name: Optional[str] = None,
-    download_mode: str = 'reuse_cache_if_exists'
-) -> datasets.Dataset:
+    download_mode: str = 'reuse_cache_if_exists',
+    cache_dir: Optional[str] = HUGGINGFACE_CACHE_DIR
+) -> Union[datasets.Dataset, Dict[str, datasets.Dataset]]:
     """Load a dataset from Hugging Face or a local directory.
-
+    
     Args:
         path (str): Path to dataset. Can be:
             - A Hugging Face dataset path (<organization>/<dataset-name>)
             - An image folder path (imagefolder:<path/to/directory>)
             - A local path to a saved dataset (for load_from_disk)
-        split (str, optional): Dataset split to load (default: 'train')
-        name (str, optional): Dataset configuration name (default: None)
-        download_mode (str, optional): Download mode for Hugging Face datasets
-
+        split (str, optional): Dataset split to load. If None, returns all splits. Default: 'train'
+        name (str, optional): Dataset configuration name. Default: None
+        download_mode (str, optional): Download mode for Hugging Face datasets. 
+            Default: 'reuse_cache_if_exists'
+        cache_dir (str, optional): Cache directory for downloaded datasets.
+            Default: None (uses default HF cache)
+            
     Returns:
-        Dataset: The loaded dataset or requested split
+        Union[datasets.Dataset, Dict[str, datasets.Dataset]]: 
+            The loaded dataset split or all splits if split=None
     """
-    # Check if it's a local path suitable for load_from_disk
-    if not path.startswith('imagefolder:') and os.path.exists(path):
-        try:
-            # Look for dataset artifacts that indicate this is a saved dataset
-            dataset_files = {'dataset_info.json', 'state.json', 'data'}
-            path_contents = set(os.listdir(path))
-            if dataset_files.intersection(path_contents):
+    # Check if it's a local path with a saved dataset
+    if os.path.isdir(os.path.expanduser(path)):
+        # Dataset artifacts that indicate this is a saved dataset
+        path = os.path.expanduser(path)        
+        dataset_artifacts = [
+            "dataset_info.json", 
+            "state.json", 
+            # Check for .arrow files or data directory
+            lambda files: any(f.endswith('.arrow') for f in files)
+        ]
+        
+        path_contents = os.listdir(path)
+        is_saved_dataset = any(
+            artifact in path_contents if isinstance(artifact, str) 
+            else artifact(path_contents) 
+            for artifact in dataset_artifacts
+        )
+        
+        if is_saved_dataset:
+            try:
                 dataset = load_from_disk(path)
-                if split is None:
-                    return dataset
-                return dataset[split]
-        except Exception as e:
-            print(f"Attempted load_from_disk but failed: {e}")
+                if split is not None and split in dataset:
+                    return dataset[split]
+                return dataset
+            except Exception as e:
+                print(f"Failed to load dataset from disk: {e}")
+                # Continue to other loading methods
 
-    if 'imagefolder' in path:
-        _, directory = path.split(':')
+    #  Hugging Face dataset, not local
+    try:
+        dataset_kwargs = {
+            "path": path,
+            "download_mode": download_mode
+        }
         if name:
-            dataset = load_dataset(path='imagefolder', name=name, data_dir=directory)
-        else:
-            dataset = load_dataset(path='imagefolder', data_dir=directory)
-    else:
-        dataset = download_dataset(
-            dataset_path=path,
-            dataset_name=name,
-            download_mode=download_mode,
-            cache_dir=HUGGINGFACE_CACHE_DIR)
-
-    if split is None:
+            dataset_kwargs["name"] = name
+        if cache_dir:
+            dataset_kwargs["cache_dir"] = cache_dir
+            
+        dataset = load_dataset(**dataset_kwargs)
+        if split is not None and split in dataset:
+            return dataset[split]
         return dataset
-    return dataset[split]
+    except Exception as e:
+        print(f"Failed to load Hugging Face dataset: {e}")
+        raise
 
 
 def download_image(url: str) -> Image.Image:
